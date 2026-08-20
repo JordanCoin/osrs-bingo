@@ -18,14 +18,34 @@ jobs:
         with:
           go-version: '1.22'
 
-      - name: Build binary
+      - name: Build binaries
         working-directory: cli
         env:
           TAG_NAME: ${{ github.ref_name }}
         run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.version=${TAG_NAME}" -o ../bingo-linux-amd64 .
+          set -eu
+          # Asset names are load-bearing. community-os installs skills by
+          # globbing `bingo-{goos}-{goarch}` off the latest release, so these
+          # names must not change — `bingo-linux-amd64` especially.
+          # The CLI is pure Go and builds with CGO_ENABLED=0, so every target
+          # cross-compiles on this one runner; a job-per-target matrix would
+          # only add runner minutes and a race between parallel uploads.
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            echo "==> bingo-${goos}-${goarch}"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -ldflags="-s -w -X main.version=${TAG_NAME}" \
+              -o "../bingo-${goos}-${goarch}" .
+          done
+          ls -l ../bingo-linux-amd64 ../bingo-linux-arm64 ../bingo-darwin-amd64 ../bingo-darwin-arm64
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: bingo-linux-amd64
+          fail_on_unmatched_files: true
+          files: |
+            bingo-linux-amd64
+            bingo-linux-arm64
+            bingo-darwin-amd64
+            bingo-darwin-arm64
