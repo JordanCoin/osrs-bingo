@@ -14,6 +14,17 @@ import (
 var teamsCmd = &cobra.Command{
 	Use:   "teams",
 	Short: "Manage board teams (rename)",
+	// A parent with subcommands otherwise accepts anything, prints its own
+	// help, and exits 0 — so `bingo tile unmark` looked like success back when
+	// unmark did not exist. Silent success is the worst answer to give a script.
+	Args: cobra.ArbitraryArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) > 0 {
+			return fmt.Errorf("unknown subcommand %q for %q\n\nRun '%s --help' for usage",
+				args[0], cmd.CommandPath(), cmd.CommandPath())
+		}
+		return cmd.Help()
+	},
 }
 
 var teamsRenameCmd = &cobra.Command{
