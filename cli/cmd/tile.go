@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/JordanCoin/osrs-bingo/cli/internal/api"
+	"github.com/JordanCoin/osrs-bingo/cli/internal/imageprep"
 	"github.com/JordanCoin/osrs-bingo/cli/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -30,17 +31,44 @@ var tileCmd = &cobra.Command{
 var tileAddCmd = &cobra.Command{
 	Use:   "add",
 	Short: "Add a tile to the next empty slot",
+	Long: `Add a tile to the next empty slot on the board.
+
+Tile art comes in one of two ways:
+
+  --image URL         stored verbatim, so the URL must outlive the event
+  --image-file PATH   read from disk, downscaled to 512px, and handed to the
+                      board host as a data URI, which it re-hosts permanently
+
+Prefer --image-file for anything uploaded by a person. A Discord attachment URL
+is signed and expires in about two weeks, which on a long event means a board
+full of broken images partway through, with nothing saying why.`,
 	Example: `  bingo tile add --board mesoscape-pvm --title "Twisted Bow" --points 10
-  bingo tile add --board mesoscape-pvm --title "Fire Cape" --points 3 --image "https://oldschool.runescape.wiki/images/thumb/Fire_cape_detail.png/150px-Fire_cape_detail.png"`,
+  bingo tile add --board mesoscape-pvm --title "Fire Cape" --points 3 --image "https://oldschool.runescape.wiki/images/thumb/Fire_cape_detail.png/150px-Fire_cape_detail.png"
+  bingo tile add --board mesoscape-pvm --title "Clan art" --points 5 --image-file ./tile.png`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		boardName, _ := cmd.Flags().GetString("board")
 		title, _ := cmd.Flags().GetString("title")
 		points, _ := cmd.Flags().GetInt("points")
 		description, _ := cmd.Flags().GetString("description")
 		imageURL, _ := cmd.Flags().GetString("image")
+		imageFile, _ := cmd.Flags().GetString("image-file")
 
 		if boardName == "" || title == "" {
 			return fmt.Errorf("--board and --title are required")
+		}
+		if imageURL != "" && imageFile != "" {
+			return fmt.Errorf("give either --image or --image-file, not both")
+		}
+
+		// Prepare the image before anything touches the network. A bad file is
+		// the caller's mistake, and it should cost them an error, not two API
+		// round trips and a half-added tile.
+		if imageFile != "" {
+			dataURI, err := imageprep.DataURIFromFile(imageFile)
+			if err != nil {
+				return err
+			}
+			imageURL = dataURI
 		}
 
 		store := state.NewStore()
@@ -304,7 +332,8 @@ func init() {
 	tileAddCmd.Flags().String("title", "", "Tile title (required)")
 	tileAddCmd.Flags().Int("points", 1, "Point value")
 	tileAddCmd.Flags().String("description", "", "Tile description")
-	tileAddCmd.Flags().String("image", "", "Image URL")
+	tileAddCmd.Flags().String("image", "", "Image URL, stored verbatim (must outlive the event)")
+	tileAddCmd.Flags().String("image-file", "", "Local image file, re-hosted permanently by the board host (mutually exclusive with --image)")
 
 	for _, c := range []*cobra.Command{tileMarkCmd, tileUnmarkCmd} {
 		c.Flags().String("board", "", "Board name (required)")
