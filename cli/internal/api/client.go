@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -15,10 +16,21 @@ type Client struct {
 	HTTPClient *http.Client
 }
 
+// DefaultBaseURL is the production board host.
+const DefaultBaseURL = "https://praynr.com"
+
 // NewClient creates an API client with default settings.
+//
+// BINGO_API_URL redirects it at another host. That exists so the tests can
+// point the real command at an httptest server and assert on the request body
+// the board host would have received, rather than trusting a hand-built one.
 func NewClient() *Client {
+	base := DefaultBaseURL
+	if override := os.Getenv("BINGO_API_URL"); override != "" {
+		base = override
+	}
 	return &Client{
-		BaseURL:    "https://praynr.com",
+		BaseURL:    base,
 		HTTPClient: &http.Client{Timeout: 15 * time.Second},
 	}
 }
