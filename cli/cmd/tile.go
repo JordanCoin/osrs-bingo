@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/JordanCoin/osrs-bingo/cli/internal/api"
@@ -14,7 +16,7 @@ import (
 
 var tileCmd = &cobra.Command{
 	Use:   "tile",
-	Short: "Manage board tiles (add, edit, remove, list, mark, unmark)",
+	Short: "Manage board tiles (add, edit, move, remove, list, mark, unmark)",
 	// A parent with subcommands otherwise accepts anything, prints its own
 	// help, and exits 0 — so `bingo tile unmark` looked like success back when
 	// unmark did not exist. Silent success is the worst answer to give a script.
@@ -30,8 +32,11 @@ var tileCmd = &cobra.Command{
 
 var tileAddCmd = &cobra.Command{
 	Use:   "add",
-	Short: "Add a tile to the next empty slot",
-	Long: `Add a tile to the next empty slot on the board.
+	Short: "Add a tile to the next empty slot, or to a chosen cell",
+	Long: `Add a tile to the next empty slot on the board, filling in reading order:
+across row 1 (A1, B1, C1...), then row 2. Give --at B2, or --col with --row
+(zero-based), to place it in a chosen cell instead; a cell that already holds a
+tile is refused.
 
 Tile art comes in one of two ways:
 
@@ -44,7 +49,8 @@ is signed and expires in about two weeks, which on a long event means a board
 full of broken images partway through, with nothing saying why.`,
 	Example: `  bingo tile add --board mesoscape-pvm --title "Twisted Bow" --points 10
   bingo tile add --board mesoscape-pvm --title "Fire Cape" --points 3 --image "https://oldschool.runescape.wiki/images/thumb/Fire_cape_detail.png/150px-Fire_cape_detail.png"
-  bingo tile add --board mesoscape-pvm --title "Clan art" --points 5 --image-file ./tile.png`,
+  bingo tile add --board mesoscape-pvm --title "Clan art" --points 5 --image-file ./tile.png
+  bingo tile add --board mesoscape-pvm --title "Zenyte shard" --points 8 --at B2`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		boardName, _ := cmd.Flags().GetString("board")
 		title, _ := cmd.Flags().GetString("title")
@@ -85,8 +91,21 @@ full of broken images partway through, with nothing saying why.`,
 			os.Exit(1)
 		}
 
-		col, row, err := findEmptySlot(data)
+		col, row, given, err := readPosition(cmd, data, "col", "row", "at")
 		if err != nil {
+			return refuse(3, "%s", err)
+		}
+		if given {
+			tile, err := findCellAt(data, col, row)
+			if err != nil {
+				return refuse(3, "%s", err)
+			}
+			if !isEmptyCell(tile) {
+				held, _ := tile["title"].(string)
+				return refuse(3, "%s already holds '%s'. Pick an empty cell, or move that tile first with 'bingo tile move'.",
+					cellName(col, row), held)
+			}
+		} else if col, row, err = findEmptySlot(data); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			os.Exit(1)
 		}
@@ -111,11 +130,11 @@ full of broken images partway through, with nothing saying why.`,
 
 		if jsonOutput {
 			out, _ := json.Marshal(map[string]interface{}{
-				"action": "tile_added", "title": title, "col": col, "row": row, "points": points,
+				"action": "tile_added", "title": title, "at": cellName(col, row), "col": col, "row": row, "points": points,
 			})
 			fmt.Println(string(out))
 		} else {
-			fmt.Printf("Added '%s' at [%d,%d] (%d pts)\n", title, col, row, points)
+			fmt.Printf("Added '%s' at %s [%d,%d] (%d pts)\n", title, cellName(col, row), col, row, points)
 		}
 		return nil
 	},
@@ -123,30 +142,97 @@ full of broken images partway through, with nothing saying why.`,
 
 // resolveTileCell finds the cell a command is addressing and hands back the
 // board's own record of it, by position when --col/--row are given and by
-// title otherwise. Position wins because it is the board's own key; a title is
+// title otherwise. Position (--at, or --col with --row) wins because it is the board's own key; a title is
 // a guess that can collide.
 //
-// Every command that addresses an existing tile goes through here — mark,
-// unmark, edit, remove — so "which tile did you mean" can only ever have one
+// Every command that addresses an existing tile goes through here (mark,
+// unmark, edit, remove, move), so "which tile did you mean" can only ever have one
 // answer, and one error message.
 func resolveTileCell(cmd *cobra.Command, data map[string]interface{}) (int, int, map[string]interface{}, error) {
-	tileName, _ := cmd.Flags().GetString("tile")
-	hasCol := cmd.Flags().Changed("col")
-	hasRow := cmd.Flags().Changed("row")
-
-	if hasCol != hasRow {
-		return 0, 0, nil, fmt.Errorf("--col and --row must be given together")
+	col, row, given, err := readPosition(cmd, data, "col", "row", "at")
+	if err != nil {
+		return 0, 0, nil, err
 	}
-	if hasCol {
-		col, _ := cmd.Flags().GetInt("col")
-		row, _ := cmd.Flags().GetInt("row")
+	if given {
 		tile, err := findCellAt(data, col, row)
 		return col, row, tile, err
 	}
+	tileName, _ := cmd.Flags().GetString("tile")
 	if tileName == "" {
-		return 0, 0, nil, fmt.Errorf("give either --tile, or --col and --row")
+		return 0, 0, nil, fmt.Errorf("give either --tile, --at, or --col and --row")
 	}
 	return findCellByName(data, tileName)
+}
+
+// readPosition reads a cell given either as --at A1 or as a zero-based column
+// and row pair; given is false when neither form was passed. Flag names are
+// parameters because move reads its destination from --to/--to-col/--to-row.
+func readPosition(cmd *cobra.Command, data map[string]interface{}, colFlag, rowFlag, atFlag string) (col, row int, given bool, err error) {
+	flags := cmd.Flags()
+	hasCol, hasRow, hasAt := flags.Changed(colFlag), flags.Changed(rowFlag), flags.Changed(atFlag)
+	if hasAt {
+		if hasCol || hasRow {
+			return 0, 0, false, fmt.Errorf("give either --%s or --%s with --%s, not both", atFlag, colFlag, rowFlag)
+		}
+		at, _ := flags.GetString(atFlag)
+		col, row, err = parseAt(at, data)
+		return col, row, true, err
+	}
+	if hasCol != hasRow {
+		return 0, 0, false, fmt.Errorf("--%s and --%s must be given together", colFlag, rowFlag)
+	}
+	if !hasCol {
+		return 0, 0, false, nil
+	}
+	col, _ = flags.GetInt(colFlag)
+	row, _ = flags.GetInt(rowFlag)
+	return col, row, true, nil
+}
+
+// cellName is the board-game name of a cell: column letter, one-based row, A1
+// top-left.
+// ponytail: one letter, so 26 columns at most; PattyRich boards are far smaller.
+func cellName(col, row int) string {
+	return fmt.Sprintf("%c%d", rune('A'+col), row+1)
+}
+
+// parseAt turns "B2" into column 1, row 1, refusing anything off this board.
+func parseAt(at string, data map[string]interface{}) (int, int, error) {
+	s := strings.ToUpper(strings.TrimSpace(at))
+	bad := fmt.Errorf("%q is not a cell; give a column letter then a row number, like A1", at)
+	if len(s) < 2 || s[0] < 'A' || s[0] > 'Z' {
+		return 0, 0, bad
+	}
+	n, err := strconv.Atoi(s[1:])
+	if err != nil || n < 1 || strings.ContainsAny(s[1:], "+-") {
+		return 0, 0, bad
+	}
+	col, row := int(s[0]-'A'), n-1
+	cols, rows := boardDims(data)
+	if cols == 0 || rows == 0 {
+		return 0, 0, fmt.Errorf("invalid board data")
+	}
+	if col >= cols || row >= rows {
+		return 0, 0, fmt.Errorf("%s is off the board, which runs from A1 to %s", s, cellName(cols-1, rows-1))
+	}
+	return col, row, nil
+}
+
+// boardDims reads the board's size off its data, [column][row].
+func boardDims(data map[string]interface{}) (cols, rows int) {
+	grid, _ := data["boardData"].([]interface{})
+	if len(grid) > 0 {
+		first, _ := grid[0].([]interface{})
+		rows = len(first)
+	}
+	return len(grid), rows
+}
+
+// isEmptyCell is true for a cell no tile occupies. "Example Tile" is the board
+// host's placeholder, so it counts as empty.
+func isEmptyCell(tile map[string]interface{}) bool {
+	title, _ := tile["title"].(string)
+	return title == "" || title == "Example Tile"
 }
 
 // resolveTile is resolveTileCell for the callers that only want the score.
@@ -542,6 +628,123 @@ with 'bingo tile unmark' first and the score goes with it.`,
 	},
 }
 
+var tileMoveCmd = &cobra.Command{
+	Use:   "move",
+	Short: "Move a tile to another cell, swapping if that cell is taken",
+	Long: `Move a tile to another cell.
+
+The tile is addressed as for mark and edit: --tile, --at, or --col with --row.
+The destination is --to C3, or --to-col with --to-row (zero-based).
+
+An empty destination takes the tile and the old cell is cleared. An occupied
+one swaps: title, description, points and art trade places. Row and column
+bonuses belong to the cell, not the tile, and stay put.
+
+A move is refused if any team has checked either cell. Completion is stored by
+cell, so the mark would end up on a different tile. Clear it with
+'bingo tile unmark' first.`,
+	Example: `  bingo tile move --board mesoscape-pvm --tile "Logs" --to C1
+  bingo tile move --board mesoscape-pvm --at A1 --to B3
+  bingo tile move --board mesoscape-pvm --col 0 --row 0 --to-col 2 --to-row 2`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		boardName, _ := cmd.Flags().GetString("board")
+		if boardName == "" {
+			return fmt.Errorf("--board is required")
+		}
+
+		board, client, data, err := loadBoard(boardName)
+		if err != nil {
+			return err
+		}
+
+		fromCol, fromRow, from, err := resolveTileCell(cmd, data)
+		if err != nil {
+			return refuse(3, "%s", err)
+		}
+		toCol, toRow, given, err := readPosition(cmd, data, "to-col", "to-row", "to")
+		if err == nil && !given {
+			err = fmt.Errorf("give the destination with --to, or --to-col and --to-row")
+		}
+		if err != nil {
+			return refuse(3, "%s", err)
+		}
+		to, err := findCellAt(data, toCol, toRow)
+		if err != nil {
+			return refuse(3, "%s", err)
+		}
+
+		fromAt, toAt := cellName(fromCol, fromRow), cellName(toCol, toRow)
+		title, _ := from["title"].(string)
+		if isEmptyCell(from) {
+			return refuse(3, "there is no tile at %s to move; the cell is empty.", fromAt)
+		}
+		if fromAt == toAt {
+			return refuse(3, "'%s' is already at %s.", title, toAt)
+		}
+
+		var marks []string
+		for _, c := range [][2]int{{fromCol, fromRow}, {toCol, toRow}} {
+			for _, team := range teamsHoldingTile(data, c[0], c[1]) {
+				marks = append(marks, fmt.Sprintf("%s has checked %s", team, cellName(c[0], c[1])))
+			}
+		}
+		if len(marks) > 0 {
+			return refuse(3, "cannot move '%s' from %s to %s: %s. Completion is stored by cell, so the mark would end up on a different tile. "+
+				"Clear it first with 'bingo tile unmark', then move.", title, fromAt, toAt, strings.Join(marks, " and "))
+		}
+
+		fromMeta := tileMetadata(from)
+		toMeta := tileMetadata(emptyCell())
+		var swappedWith interface{}
+		if !isEmptyCell(to) {
+			toMeta = tileMetadata(to)
+			swappedWith = toMeta["title"]
+		}
+
+		write := func(col, row int, info map[string]interface{}) error {
+			return client.UpdateBoard(boardName, board.AdminPassword, "admin", col, row, info)
+		}
+		if err := write(toCol, toRow, fromMeta); err != nil {
+			return refuse(1, "nothing moved; writing %s failed: %s", toAt, err)
+		}
+		if err := write(fromCol, fromRow, toMeta); err != nil {
+			if rerr := write(toCol, toRow, tileMetadata(to)); rerr != nil {
+				return refuse(1, "move failed halfway: writing %s failed (%s), and putting %s back also failed (%s). "+
+					"%s now holds a copy of '%s'; fix it with 'bingo tile edit' or 'bingo tile remove'.",
+					fromAt, err, toAt, rerr, toAt, title)
+			}
+			return refuse(1, "nothing moved; writing %s failed (%s), so %s was restored.", fromAt, err, toAt)
+		}
+
+		check, err := client.GetBoard(boardName, board.AdminPassword, "admin")
+		if err != nil {
+			return refuse(1, "both cells were written, but reading the board back failed: %s", err)
+		}
+		for _, want := range []struct {
+			col, row int
+			meta     map[string]interface{}
+		}{{toCol, toRow, fromMeta}, {fromCol, fromRow, toMeta}} {
+			got, err := findCellAt(check, want.col, want.row)
+			if err != nil || !reflect.DeepEqual(tileMetadata(got), want.meta) {
+				return refuse(1, "both cells were written, but %s reads back differently; check the board.", cellName(want.col, want.row))
+			}
+		}
+
+		if jsonOutput {
+			out, _ := json.Marshal(map[string]interface{}{
+				"action": "tile_moved", "title": title, "from": fromAt, "to": toAt, "swapped_with": swappedWith,
+			})
+			fmt.Println(string(out))
+		} else if swappedWith != nil {
+			fmt.Printf("Swapped '%s' (now %s) with '%s' (now %s)\n", title, toAt, swappedWith, fromAt)
+		} else {
+			fmt.Printf("Moved '%s' from %s to %s\n", title, fromAt, toAt)
+		}
+		return nil
+	},
+}
+
 var tileListCmd = &cobra.Command{
 	Use:     "list",
 	Short:   "List all tiles on the board",
@@ -613,12 +816,16 @@ func init() {
 	tileAddCmd.Flags().String("description", "", "Tile description")
 	tileAddCmd.Flags().String("image", "", "Image URL, stored verbatim (must outlive the event)")
 	tileAddCmd.Flags().String("image-file", "", "Local image file, re-hosted permanently by the board host (mutually exclusive with --image)")
+	tileAddCmd.Flags().String("at", "", "Place the tile in this cell, like B2 (default: next empty cell in reading order)")
+	tileAddCmd.Flags().Int("col", 0, "Place the tile in this zero-based column (needs --row)")
+	tileAddCmd.Flags().Int("row", 0, "Place the tile in this zero-based row (needs --col)")
 
-	// Every command that addresses an existing tile takes the same four flags,
+	// Every command that addresses an existing tile takes the same five flags,
 	// because they all hand them to the same resolver.
-	for _, c := range []*cobra.Command{tileMarkCmd, tileUnmarkCmd, tileEditCmd, tileRemoveCmd} {
+	for _, c := range []*cobra.Command{tileMarkCmd, tileUnmarkCmd, tileEditCmd, tileRemoveCmd, tileMoveCmd} {
 		c.Flags().String("board", "", "Board name (required)")
-		c.Flags().String("tile", "", "Tile title (required unless --col/--row)")
+		c.Flags().String("tile", "", "Tile title (required unless --at or --col/--row)")
+		c.Flags().String("at", "", "Tile cell like B2 (column letter, row number, A1 top-left)")
 		c.Flags().Int("col", 0, "Tile column, unambiguous alternative to --tile (needs --row)")
 		c.Flags().Int("row", 0, "Tile row, unambiguous alternative to --tile (needs --col)")
 	}
@@ -632,37 +839,38 @@ func init() {
 	tileEditCmd.Flags().String("image", "", `New image URL, stored verbatim; pass "" to clear the art`)
 	tileEditCmd.Flags().String("image-file", "", "New image from a local file, re-hosted permanently by the board host (mutually exclusive with --image)")
 
+	tileMoveCmd.Flags().String("to", "", "Destination cell like C3")
+	tileMoveCmd.Flags().Int("to-col", 0, "Destination zero-based column (needs --to-row)")
+	tileMoveCmd.Flags().Int("to-row", 0, "Destination zero-based row (needs --to-col)")
+
 	tileRemoveCmd.Flags().Bool("force", false, "Remove even when a team has already scored the tile")
 
 	tileListCmd.Flags().String("board", "", "Board name (required)")
 
 	tileCmd.AddCommand(tileAddCmd)
 	tileCmd.AddCommand(tileEditCmd)
+	tileCmd.AddCommand(tileMoveCmd)
 	tileCmd.AddCommand(tileRemoveCmd)
 	tileCmd.AddCommand(tileMarkCmd)
 	tileCmd.AddCommand(tileUnmarkCmd)
 	tileCmd.AddCommand(tileListCmd)
 }
 
+// findEmptySlot finds the first empty cell in reading order, across each row
+// before the next, because that is the order a planner lists tiles in.
 func findEmptySlot(data map[string]interface{}) (int, int, error) {
-	boardData, ok := data["boardData"].([]interface{})
-	if !ok {
+	if _, ok := data["boardData"].([]interface{}); !ok {
 		return 0, 0, fmt.Errorf("invalid board data")
 	}
-	for col, colData := range boardData {
-		if rows, ok := colData.([]interface{}); ok {
-			for row, rowData := range rows {
-				if tile, ok := rowData.(map[string]interface{}); ok {
-					title, _ := tile["title"].(string)
-					// Treat "Example Tile" (PattyRich default) as empty
-					if title == "" || title == "Example Tile" {
-						return col, row, nil
-					}
-				}
+	cols, rows := boardDims(data)
+	for row := 0; row < rows; row++ {
+		for col := 0; col < cols; col++ {
+			if tile, err := findCellAt(data, col, row); err == nil && isEmptyCell(tile) {
+				return col, row, nil
 			}
 		}
 	}
-	return 0, 0, fmt.Errorf("no empty slots — board is full")
+	return 0, 0, fmt.Errorf("no empty slots; the board is full")
 }
 
 // findCellByName resolves a tile title to its position and the board's record
@@ -710,10 +918,10 @@ func findCellByName(data map[string]interface{}, name string) (int, int, map[str
 	default:
 		positions := make([]string, 0, len(hits))
 		for _, h := range hits {
-			positions = append(positions, fmt.Sprintf("%d,%d", h.col, h.row))
+			positions = append(positions, fmt.Sprintf("%s [%d,%d]", cellName(h.col, h.row), h.col, h.row))
 		}
 		return 0, 0, nil, fmt.Errorf(
-			"tile '%s' appears %d times (at col,row %s) — address it with --col and --row instead of --tile",
+			"tile '%s' appears %d times (at %s); address it with --at, or --col and --row, instead of --tile",
 			name, len(hits), strings.Join(positions, " and "))
 	}
 }

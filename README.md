@@ -24,6 +24,7 @@ bingo teams rename --board mesoscape-pvm --teams "Alpha,Beta"
 bingo tile add    --board mesoscape-pvm --title "Twisted Bow" --points 10
 bingo tile list   --board mesoscape-pvm
 bingo tile edit   --board mesoscape-pvm --tile "Twisted Bow" --points 12
+bingo tile move   --board mesoscape-pvm --tile "Twisted Bow" --to C3
 bingo tile remove --board mesoscape-pvm --tile "Example Tile"
 bingo tile mark   --board mesoscape-pvm --tile "Twisted Bow" --team Raiders
 bingo tile unmark --board mesoscape-pvm --tile "Twisted Bow" --team Raiders
@@ -31,10 +32,28 @@ bingo tile unmark --board mesoscape-pvm --tile "Twisted Bow" --team Raiders
 
 ### Addressing a tile
 
-Every command that touches an existing tile takes either `--tile` (exact title,
-case-insensitive) or `--col` with `--row`. Prefer the position from a script: a
-title can repeat on a board, and a repeated title is refused rather than guessed
-at. Positions are `[column,row]`, the same order `tile list` prints.
+Every command that touches an existing tile takes `--tile` (exact title,
+case-insensitive), `--at B2` (column letter, row number, A1 top-left), or `--col`
+with `--row` (zero-based). Prefer a position from a script: a title can repeat
+on a board, and a repeated title is refused rather than guessed at. Positions
+are `[column,row]`, the same order `tile list` prints; `board show --json` adds
+`"at"` to every cell.
+
+`tile add` fills the next empty cell in reading order (A1, B1, C1, then A2), or
+the cell named by `--at` / `--col --row`, refusing one that already holds a tile.
+
+### `tile move`
+
+```
+bingo tile move --board B (--tile T | --at A1 | --col C --row R) (--to C3 | --to-col C --to-row R)
+```
+
+An empty destination takes the tile and the old cell is cleared; an occupied one
+swaps title, description, points and art. Row and column bonuses stay with their
+cells. Refused if any team has checked either cell, since completion is stored
+by cell. The destination is written first; if the second write fails the
+destination is put back. Both cells are then read back and verified.
+`--json` prints `{"action":"tile_moved","title":..,"from":"A1","to":"C3","swapped_with":null}`.
 
 ### `tile edit`
 
