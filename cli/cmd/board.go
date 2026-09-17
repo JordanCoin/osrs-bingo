@@ -127,6 +127,16 @@ var boardShowCmd = &cobra.Command{
 		}
 
 		if jsonOutput {
+			if grid, ok := data["boardData"].([]interface{}); ok {
+				for col, column := range grid {
+					cells, _ := column.([]interface{})
+					for row, cell := range cells {
+						if tile, ok := cell.(map[string]interface{}); ok {
+							tile["at"] = cellName(col, row)
+						}
+					}
+				}
+			}
 			out, _ := json.MarshalIndent(data, "", "  ")
 			fmt.Println(string(out))
 		} else {

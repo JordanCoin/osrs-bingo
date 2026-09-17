@@ -11,15 +11,21 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // editHost stands in for praynr.com. It serves a board of our choosing and
 // records every update it is sent, top-level row/col included, because the
 // row/col swap is the part of this CLI most likely to be broken silently.
+//
+// Admin updates are merged into the served board the way the real host merges
+// them, so a command that reads the board back sees its own writes. failOn
+// makes the Nth update (1-based) answer 500.
 type editHost struct {
 	server  *httptest.Server
 	boardJS []byte
 	updates []recordedUpdate
+	failOn  int
 }
 
 type recordedUpdate struct {
@@ -47,12 +53,36 @@ func newEditHost(t *testing.T, boardJS []byte) *editHost {
 		}
 		u.path = r.URL.Path
 		h.updates = append(h.updates, u)
+		if len(h.updates) == h.failOn {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		if strings.Contains(u.path, "/admin") {
+			h.apply(t, u)
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 
 	h.server = httptest.NewServer(mux)
 	t.Cleanup(h.server.Close)
 	return h
+}
+
+func (h *editHost) apply(t *testing.T, u recordedUpdate) {
+	t.Helper()
+	var b map[string]interface{}
+	if err := json.Unmarshal(h.boardJS, &b); err != nil {
+		t.Fatal(err)
+	}
+	cell := b["boardData"].([]interface{})[u.Row].([]interface{})[u.Col].(map[string]interface{})
+	for k, v := range u.Info {
+		cell[k] = v
+	}
+	out, err := json.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.boardJS = out
 }
 
 func (h *editHost) only(t *testing.T) recordedUpdate {
@@ -138,6 +168,18 @@ func useHost(t *testing.T, h *editHost) {
 	t.Setenv("BINGO_API_URL", h.server.URL)
 }
 
+func resetFlags(c *cobra.Command) {
+	reset := func(f *pflag.Flag) {
+		_ = f.Value.Set(f.DefValue)
+		f.Changed = false
+	}
+	c.Flags().VisitAll(reset)
+	c.PersistentFlags().VisitAll(reset)
+	for _, sub := range c.Commands() {
+		resetFlags(sub)
+	}
+}
+
 // runTile drives the real cobra command rather than a copy of its logic, and
 // captures the exit code a refusal would have used.
 //
@@ -157,14 +199,7 @@ func runTile(t *testing.T, args ...string) (error, int) {
 	rootCmd.SilenceErrors = true
 	t.Cleanup(func() {
 		exit = prev
-		for _, c := range []*cobra.Command{tileEditCmd, tileRemoveCmd} {
-			for _, n := range []string{"board", "tile", "col", "row", "title", "points", "description", "image", "image-file", "force"} {
-				if f := c.Flags().Lookup(n); f != nil {
-					_ = f.Value.Set(f.DefValue)
-					f.Changed = false
-				}
-			}
-		}
+		resetFlags(rootCmd)
 	})
 	err := rootCmd.Execute()
 	return err, code
