@@ -218,14 +218,15 @@ func parseAt(at string, data map[string]interface{}) (int, int, error) {
 	return col, row, nil
 }
 
-// boardDims reads the board's size off its data, [column][row].
+// boardDims reads the board's size off its data. The host stores and the
+// site draws boardData[row][col]: boardData[0] is the top row, left to right.
 func boardDims(data map[string]interface{}) (cols, rows int) {
 	grid, _ := data["boardData"].([]interface{})
 	if len(grid) > 0 {
 		first, _ := grid[0].([]interface{})
-		rows = len(first)
+		cols = len(first)
 	}
-	return len(grid), rows
+	return cols, len(grid)
 }
 
 // isEmptyCell is true for a cell no tile occupies. "Example Tile" is the board
@@ -431,14 +432,14 @@ func teamsHoldingTile(data map[string]interface{}, col, row int) []string {
 			continue
 		}
 		grid, ok := d["teamData"].([]interface{})
-		if !ok || col < 0 || col >= len(grid) {
+		if !ok || row < 0 || row >= len(grid) {
 			continue
 		}
-		rows, ok := grid[col].([]interface{})
-		if !ok || row < 0 || row >= len(rows) {
+		cells, ok := grid[row].([]interface{})
+		if !ok || col < 0 || col >= len(cells) {
 			continue
 		}
-		cell, ok := rows[row].(map[string]interface{})
+		cell, ok := cells[col].(map[string]interface{})
 		if !ok {
 			continue
 		}
@@ -778,10 +779,10 @@ var tileListCmd = &cobra.Command{
 		var tiles []TileInfo
 
 		if boardData, ok := data["boardData"].([]interface{}); ok {
-			for col, colData := range boardData {
-				if rows, ok := colData.([]interface{}); ok {
-					for row, rowData := range rows {
-						if tile, ok := rowData.(map[string]interface{}); ok {
+			for row, rowData := range boardData {
+				if cells, ok := rowData.([]interface{}); ok {
+					for col, cellData := range cells {
+						if tile, ok := cellData.(map[string]interface{}); ok {
 							title, _ := tile["title"].(string)
 							if title != "" {
 								pts, _ := tile["points"].(float64)
@@ -897,10 +898,10 @@ func findCellByName(data map[string]interface{}, name string) (int, int, map[str
 	}
 	var hits []hit
 
-	for col, colData := range boardData {
-		if rows, ok := colData.([]interface{}); ok {
-			for row, rowData := range rows {
-				if tile, ok := rowData.(map[string]interface{}); ok {
+	for row, rowData := range boardData {
+		if cells, ok := rowData.([]interface{}); ok {
+			for col, cellData := range cells {
+				if tile, ok := cellData.(map[string]interface{}); ok {
 					title, _ := tile["title"].(string)
 					if strings.ToLower(title) == nameLower {
 						hits = append(hits, hit{col, row, tile})
@@ -962,17 +963,17 @@ func findCellAt(data map[string]interface{}, col, row int) (map[string]interface
 	if !ok {
 		return nil, fmt.Errorf("invalid board data")
 	}
-	if col < 0 || col >= len(boardData) {
-		return nil, fmt.Errorf("column %d is off the board (0-%d)", col, len(boardData)-1)
+	if row < 0 || row >= len(boardData) {
+		return nil, fmt.Errorf("row %d is off the board (0-%d)", row, len(boardData)-1)
 	}
-	rows, ok := boardData[col].([]interface{})
+	cells, ok := boardData[row].([]interface{})
 	if !ok {
-		return nil, fmt.Errorf("invalid column data at %d", col)
+		return nil, fmt.Errorf("invalid row data at %d", row)
 	}
-	if row < 0 || row >= len(rows) {
-		return nil, fmt.Errorf("row %d is off the board (0-%d)", row, len(rows)-1)
+	if col < 0 || col >= len(cells) {
+		return nil, fmt.Errorf("column %d is off the board (0-%d)", col, len(cells)-1)
 	}
-	tile, ok := rows[row].(map[string]interface{})
+	tile, ok := cells[col].(map[string]interface{})
 	if !ok {
 		return nil, fmt.Errorf("invalid tile at %d,%d", col, row)
 	}

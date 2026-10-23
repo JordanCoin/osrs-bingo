@@ -2,21 +2,21 @@ package cmd
 
 import "testing"
 
-// board builds the nested boardData shape the API returns: a list of columns,
-// each a list of row tiles.
+// board builds the nested boardData shape the API returns: a list of rows,
+// top first, each a list of tiles left to right.
 func board(titles [][]string) map[string]interface{} {
-	cols := make([]interface{}, 0, len(titles))
-	for _, col := range titles {
-		rows := make([]interface{}, 0, len(col))
-		for _, title := range col {
-			rows = append(rows, map[string]interface{}{
+	rows := make([]interface{}, 0, len(titles))
+	for _, row := range titles {
+		cells := make([]interface{}, 0, len(row))
+		for _, title := range row {
+			cells = append(cells, map[string]interface{}{
 				"title":  title,
 				"points": float64(5),
 			})
 		}
-		cols = append(cols, rows)
+		rows = append(rows, cells)
 	}
-	return map[string]interface{}{"boardData": cols}
+	return map[string]interface{}{"boardData": rows}
 }
 
 func TestFindTileByNameIsExactNotFuzzy(t *testing.T) {
@@ -36,7 +36,7 @@ func TestFindTileByNameIsExactNotFuzzy(t *testing.T) {
 func TestDuplicateTitlesAreAnErrorNotASilentFirstMatch(t *testing.T) {
 	// Two tiles can legitimately share a title on a big board. Silently taking
 	// the first means the second can never be marked, and nobody is told why.
-	b := board([][]string{{"Twisted Bow"}, {"Twisted Bow"}})
+	b := board([][]string{{"Twisted Bow", "Twisted Bow"}})
 	_, _, _, err := findTileByName(b, "Twisted Bow")
 	if err == nil {
 		t.Fatal("duplicate titles must be an error, not a silent first match")

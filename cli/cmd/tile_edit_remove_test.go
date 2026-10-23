@@ -107,17 +107,17 @@ func fixtureCell(title string, points int, description string, image interface{}
 }
 
 func fixtureTeam(name string, checked map[[2]int]bool, cols, rows int) map[string]interface{} {
-	grid := make([]interface{}, 0, cols)
-	for c := 0; c < cols; c++ {
-		col := make([]interface{}, 0, rows)
-		for r := 0; r < rows; r++ {
-			col = append(col, map[string]interface{}{
+	grid := make([]interface{}, 0, rows)
+	for r := 0; r < rows; r++ {
+		row := make([]interface{}, 0, cols)
+		for c := 0; c < cols; c++ {
+			row = append(row, map[string]interface{}{
 				"checked":    checked[[2]int{c, r}],
 				"proof":      "",
 				"currPoints": 0,
 			})
 		}
-		grid = append(grid, col)
+		grid = append(grid, row)
 	}
 	return map[string]interface{}{
 		"data": map[string]interface{}{"name": name, "teamData": grid},
@@ -130,13 +130,14 @@ func twoByTwo(t *testing.T, checked map[[2]int]bool) []byte {
 	t.Helper()
 	body := map[string]interface{}{
 		"boardData": []interface{}{
+			// Top row: Twisted Bow at A1, Fire Cape at B1. Bottom row empty.
 			[]interface{}{
 				fixtureCell("Twisted Bow", 5, "Drop from CoX",
 					map[string]interface{}{"url": "https://wiki/tbow.png", "opacity": 100}),
-				fixtureCell("", 0, "", nil),
+				fixtureCell("Fire Cape", 3, "", nil),
 			},
 			[]interface{}{
-				fixtureCell("Fire Cape", 3, "", nil),
+				fixtureCell("", 0, "", nil),
 				fixtureCell("", 0, "", nil),
 			},
 		},
@@ -350,11 +351,11 @@ func TestEditImageFileArrivesAsADataURI(t *testing.T) {
 	}
 }
 
-// The board host reads boardData[row][col] but stores it [column][row], so the
-// client sends our column as the API's "row". Dropping that swap in a new call
+// The board host writes boardData[row][col], the shape the site draws, so a
+// cell's row and column go to the API unchanged. Swapping them in a new call
 // path writes to the transposed cell, which on a non-square board is a silent
 // write to a different tile.
-func TestEditSendsTheColumnAsTheAPIsRow(t *testing.T) {
+func TestEditSendsTheCellsRowAndColumnToTheAPI(t *testing.T) {
 	h := newEditHost(t, twoByTwo(t, nil))
 	useHost(t, h)
 
@@ -363,13 +364,14 @@ func TestEditSendsTheColumnAsTheAPIsRow(t *testing.T) {
 		t.Fatalf("tile edit failed: %v", err)
 	}
 
-	// Fire Cape sits at column 1, row 0.
+	// Fire Cape sits at B1: column 1, row 0, and the server writes
+	// boardData[row][col], so row and col go through unchanged.
 	u := h.only(t)
-	if u.Row != 1 {
-		t.Errorf(`the API's "row" must carry our column index 1, got %d`, u.Row)
+	if u.Row != 0 {
+		t.Errorf(`the API's "row" must carry row 0, got %d`, u.Row)
 	}
-	if u.Col != 0 {
-		t.Errorf(`the API's "col" must carry our row index 0, got %d`, u.Col)
+	if u.Col != 1 {
+		t.Errorf(`the API's "col" must carry column 1, got %d`, u.Col)
 	}
 	if !strings.Contains(u.path, "/admin") {
 		t.Errorf("tile metadata needs the admin password, went to %s", u.path)
@@ -516,7 +518,7 @@ func TestRemoveAddressingAcceptsPosition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("positional removal failed: %v", err)
 	}
-	if u := h.only(t); u.Row != 1 || u.Col != 0 {
+	if u := h.only(t); u.Row != 0 || u.Col != 1 {
 		t.Errorf("positional removal addressed the wrong cell: row=%d col=%d", u.Row, u.Col)
 	}
 }
