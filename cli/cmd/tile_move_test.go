@@ -10,19 +10,20 @@ import (
 
 // gridBoard builds a cols x rows board with every cell virgin except the named
 // tiles, keyed [column,row], and the Raiders team holding the checked cells.
+// The grid is stored the way the host stores it: boardData[row][col].
 func gridBoard(t *testing.T, cols, rows int, tiles map[[2]int]map[string]interface{}, checked map[[2]int]bool) []byte {
 	t.Helper()
-	grid := make([]interface{}, cols)
-	for c := 0; c < cols; c++ {
-		column := make([]interface{}, rows)
-		for r := 0; r < rows; r++ {
+	grid := make([]interface{}, rows)
+	for r := 0; r < rows; r++ {
+		row := make([]interface{}, cols)
+		for c := 0; c < cols; c++ {
 			if tile, ok := tiles[[2]int{c, r}]; ok {
-				column[r] = tile
+				row[c] = tile
 			} else {
-				column[r] = fixtureCell("", 0, "", nil)
+				row[c] = fixtureCell("", 0, "", nil)
 			}
 		}
-		grid[c] = column
+		grid[r] = row
 	}
 	out, err := json.Marshal(map[string]interface{}{
 		"boardData": grid,
@@ -71,12 +72,11 @@ func TestAddFillsInReadingOrder(t *testing.T) {
 	if len(h.updates) != 4 {
 		t.Fatalf("expected 4 updates, got %d", len(h.updates))
 	}
-	// API "row" carries our column, API "col" our row.
-	if u := h.updates[2]; u.Row != 2 || u.Col != 0 {
-		t.Errorf("third add should land at C1 (column 2, row 0), got column %d row %d", u.Row, u.Col)
+	if u := h.updates[2]; u.Row != 0 || u.Col != 2 {
+		t.Errorf("third add should land at C1 (column 2, row 0), got column %d row %d", u.Col, u.Row)
 	}
-	if u := h.updates[3]; u.Row != 0 || u.Col != 1 {
-		t.Errorf("fourth add should land at A2 (column 0, row 1), got column %d row %d", u.Row, u.Col)
+	if u := h.updates[3]; u.Row != 1 || u.Col != 0 {
+		t.Errorf("fourth add should land at A2 (column 0, row 1), got column %d row %d", u.Col, u.Row)
 	}
 }
 
@@ -90,7 +90,7 @@ func TestAddTreatsExampleTileAsEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	if u := h.only(t); u.Row != 0 || u.Col != 0 {
-		t.Errorf("Example Tile should be filled first, add went to column %d row %d", u.Row, u.Col)
+		t.Errorf("Example Tile should be filled first, add went to column %d row %d", u.Col, u.Row)
 	}
 }
 
@@ -104,7 +104,7 @@ func TestAddAtAPositionPlacesTheTile(t *testing.T) {
 		}
 	})
 	if u := h.only(t); u.Row != 1 || u.Col != 1 {
-		t.Errorf("--at B2 wrote column %d row %d", u.Row, u.Col)
+		t.Errorf("--at B2 wrote column %d row %d", u.Col, u.Row)
 	}
 	var got map[string]interface{}
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
@@ -317,7 +317,7 @@ func TestBoardShowJSONNamesEachCell(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("board show --json printed %q: %v", out, err)
 	}
-	fire := got["boardData"].([]interface{})[1].([]interface{})[0].(map[string]interface{})
+	fire := got["boardData"].([]interface{})[0].([]interface{})[1].(map[string]interface{})
 	if fire["title"] != "Fire Cape" || fire["at"] != "B1" {
 		t.Errorf(`Fire Cape (column 1, row 0) should carry "at":"B1": %#v`, fire)
 	}

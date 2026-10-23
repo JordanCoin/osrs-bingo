@@ -76,15 +76,15 @@ func (c *Client) GetBoard(name, password, pwType string) (map[string]interface{}
 // Use admin pw + "admin" for metadata (title, points, image).
 // Use general pw + "general" for completion state (checked, currPoints, teamId).
 //
-// IMPORTANT: PattyRich API naming is confusing. The server accesses
-// boardData[data['row']][data['col']], but boardData is indexed as
-// boardData[column][row]. So the API's "row" param = our column index,
-// and the API's "col" param = our row index.
+// The server writes boardData[row][col], the same shape the site draws, so
+// row and col pass straight through. An earlier version swapped them to
+// match a CLI that read the grid as [column][row]; that is what made --at B1
+// land on the second row.
 func (c *Client) UpdateBoard(name, password, pwType string, col, row int, info map[string]interface{}) error {
 	url := fmt.Sprintf("%s/updateBoard/%s/%s/%s", c.BaseURL, name, password, pwType)
 	body := map[string]interface{}{
-		"row":  col, // API "row" = boardData first index = column
-		"col":  row, // API "col" = boardData second index = row
+		"row":  row,
+		"col":  col,
 		"info": info,
 	}
 	return c.put(url, body)

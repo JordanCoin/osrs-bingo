@@ -128,9 +128,9 @@ var boardShowCmd = &cobra.Command{
 
 		if jsonOutput {
 			if grid, ok := data["boardData"].([]interface{}); ok {
-				for col, column := range grid {
-					cells, _ := column.([]interface{})
-					for row, cell := range cells {
+				for row, rowData := range grid {
+					cells, _ := rowData.([]interface{})
+					for col, cell := range cells {
 						if tile, ok := cell.(map[string]interface{}); ok {
 							tile["at"] = cellName(col, row)
 						}
@@ -144,10 +144,10 @@ var boardShowCmd = &cobra.Command{
 			fmt.Printf("URL: https://pattyrich.github.io/github-pages/#/bingo/%s?password=%s\n", name, board.GeneralPassword)
 			fmt.Printf("Teams: %s\n", strings.Join(board.Teams, ", "))
 			if tiles, ok := data["boardData"].([]interface{}); ok {
-				for col, colData := range tiles {
-					if rows, ok := colData.([]interface{}); ok {
-						for row, rowData := range rows {
-							if tile, ok := rowData.(map[string]interface{}); ok {
+				for row, rowData := range tiles {
+					if cells, ok := rowData.([]interface{}); ok {
+						for col, cellData := range cells {
+							if tile, ok := cellData.(map[string]interface{}); ok {
 								title, _ := tile["title"].(string)
 								if title != "" {
 									points, _ := tile["points"].(float64)
